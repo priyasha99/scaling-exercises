@@ -1,0 +1,35 @@
+# =============================================================
+# Exercise 01 - Single Server Under Load
+# =============================================================
+# This compose file runs ONE app server with tight resource
+# limits. The goal is to hit its breaking point with load testing.
+#
+# Usage:
+#   docker compose up --build
+#   (then run the k6 load tests from the loadtest/ directory)
+# =============================================================
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    # -------------------------------------------------------
+    # Resource constraints - simulating a small server.
+    # 1 CPU core and 512MB RAM is roughly equivalent to
+    # a t2.micro / t3.micro EC2 instance.
+    # -------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
