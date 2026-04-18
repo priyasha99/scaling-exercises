@@ -136,14 +136,30 @@ curl http://localhost:8080/api/products/health
 
 You should see JSON with status, memory info, and processor count.
 
-### Step 3: Run the load tests (in order!)
+### Step 3: Monitor the server (keep this running!)
 
-Open a **new terminal** and run each stage. After each one, look at the results before moving on.
+Open a **second terminal** and run:
+```bash
+docker stats
+```
+
+This gives you a live-updating table showing CPU %, memory usage, memory limit, and network I/O for your container. It refreshes every second. Keep this visible — you'll watch CPU climb from ~5% to 100% as load increases.
+
+```
+CONTAINER ID   NAME                          CPU %   MEM USAGE / LIMIT   NET I/O
+a1b2c3d4e5f6   exercise-01-single-server..   4.32%   198MiB / 512MiB     1.2MB / 850kB
+```
+
+### Step 4: Run the load tests (in order!)
+
+Open a **third terminal** and run each stage. Use the k6 web dashboard for real-time visibility — it opens automatically at `http://localhost:5665` and shows VU count, request rates, response times, and error rates updating live.
+
+After each stage, compare the k6 dashboard with the `docker stats` output. The cause and effect becomes impossible to miss.
 
 #### Stage 1: Gentle Warmup (baseline)
 ```bash
 cd exercise-01-single-server-limit/loadtest
-k6 run 01-gentle-warmup.js
+K6_WEB_DASHBOARD=true k6 run 01-gentle-warmup.js
 ```
 
 **What to observe:**
@@ -154,7 +170,7 @@ k6 run 01-gentle-warmup.js
 
 #### Stage 2: Ramp Up Pressure
 ```bash
-k6 run 02-ramp-up-pressure.js
+K6_WEB_DASHBOARD=true k6 run 02-ramp-up-pressure.js
 ```
 
 **What to observe:**
@@ -166,7 +182,7 @@ k6 run 02-ramp-up-pressure.js
 
 #### Stage 3: Break the Server
 ```bash
-k6 run 03-break-the-server.js
+K6_WEB_DASHBOARD=true k6 run 03-break-the-server.js
 ```
 
 **What to observe:**
@@ -188,16 +204,24 @@ http_req_failed ..... 23.45%
 iterations .......... 8432
 ```
 
-**Key metrics to compare across stages:**
+**Key metrics to compare across stages (actual results):**
 
-| Metric            | Stage 1 (10 users) | Stage 2 (100 users) | Stage 3 (500 users) |
-|-------------------|---------------------|----------------------|----------------------|
-| p50 latency       | ~20ms               | ~200ms               | ~3000ms+             |
-| p95 latency       | ~100ms              | ~2000ms              | ~10000ms+            |
-| Error rate        | 0%                  | ~5%                  | ~20%+                |
-| Requests/sec      | ~50                 | ~150 (plateau)       | ~100 (DECLINING!)    |
+| Metric            | Stage 1 (10 users) | Stage 2 (100 users)  | Stage 3 (500 users)     |
+|-------------------|---------------------|----------------------|-------------------------|
+| Median response   | 13ms                | 44ms                 | **7,462ms**             |
+| p90 latency       | 49ms                | 1,840ms              | **13,403ms**            |
+| p95 latency       | 68ms                | 2,509ms              | **14,630ms**            |
+| Max response      | 438ms               | 6,628ms              | **15,009ms** (timeout!) |
+| Error rate        | 0%                  | 0.14%                | **5.31%**               |
+| Timeouts          | 0                   | 0                    | **1,631**               |
+| Requests/sec      | 3.8                 | 46.8                 | **36.6 (DECLINING!)**   |
+| "Under 2s"        | 100%                | 91%                  | **16%**                 |
 
-**The key insight:** Notice that requests/sec actually DROPS at Stage 3. Adding more users doesn't mean more throughput — past a point, the server spends all its time context-switching, garbage collecting, and managing queues instead of doing useful work.
+**Key insights:**
+
+- **Throughput collapses.** Requests/sec goes DOWN from Stage 2 to Stage 3. Adding more users actually made the server do *less* work, not more. The CPU spends all its time context-switching and garbage collecting instead of processing requests.
+- **Averages lie.** In Stage 2, the average is 583ms but the median is 44ms — a 13x gap. Most users are fine, but an unlucky group waits 6+ seconds. This is why production systems monitor percentiles (p50, p90, p99), not averages.
+- **One bad endpoint poisons everything.** The heavy `/stats` endpoint consumed all threads and DB connections, starving even lightweight health checks. One expensive query can take down an entire server.
 
 ---
 
@@ -223,13 +247,38 @@ If you finish early:
 
 - **Modify `application.properties`** to increase the thread pool to 200 and the DB pool to 50. Re-run Stage 3. Does it help? By how much? Is there a new bottleneck?
 
-- **Watch container metrics** while the load test runs:
+- **Watch container metrics** while the load test runs (if you haven't already):
   ```bash
   docker stats
   ```
-  When does CPU hit 100%? When does memory spike?
+  When does CPU hit 100%? When does memory spike? Compare this across all 3 stages.
 
 - **Add `-e JAVA_OPTS="-Xmx128m -Xms64m"` to docker-compose.yml** to cut memory in half. How much sooner does the server break?
+
+---
+
+## Monitoring Deep Dive
+
+While the load tests run, you can query Spring Boot Actuator endpoints to see what's happening inside the JVM:
+
+```bash
+# JVM memory usage
+curl -s http://localhost:8080/actuator/metrics/jvm.memory.used | python3 -m json.tool
+
+# Live thread count
+curl -s http://localhost:8080/actuator/metrics/jvm.threads.live | python3 -m json.tool
+
+# Tomcat threads currently busy (compare this to the 50 thread max)
+curl -s http://localhost:8080/actuator/metrics/tomcat.threads.busy | python3 -m json.tool
+
+# HikariCP active DB connections (compare this to the 10 connection max)
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.active | python3 -m json.tool
+
+# HikariCP pending threads waiting for a connection
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.pending | python3 -m json.tool
+```
+
+Try querying these during Stage 1 vs Stage 3 — during Stage 3, you'll see Tomcat threads pinned at 50 and HikariCP connections at 10 with many pending. That's the bottleneck chain in action.
 
 ---
 
