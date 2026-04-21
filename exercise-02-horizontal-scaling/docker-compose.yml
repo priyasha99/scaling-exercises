@@ -1,0 +1,73 @@
+# =============================================================
+# Exercise 02 - Horizontal Scaling with Load Balancer
+# =============================================================
+# Same app from Exercise 01, but now we run MULTIPLE instances
+# behind an Nginx load balancer.
+#
+# The app containers have the SAME resource constraints as
+# Exercise 01 (1 CPU, 512MB). The difference is there are 3
+# of them, so total capacity is 3x.
+#
+# Usage:
+#   # Start with 3 app instances (default)
+#   docker compose up --build
+#
+#   # Scale to 5 instances on the fly
+#   docker compose up --scale app=5 --no-recreate
+#
+#   # Scale back down to 2
+#   docker compose up --scale app=2 --no-recreate
+# =============================================================
+
+services:
+  # -------------------------------------------------------
+  # Nginx Load Balancer
+  # Sits in front, distributes traffic across app instances
+  # -------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # -------------------------------------------------------
+  # App Servers (Spring Boot)
+  # Built from Exercise 01's Dockerfile.
+  # Each instance has the SAME constraints as Exercise 01:
+  #   - 1 CPU core
+  #   - 512MB RAM
+  #   - 256MB JVM heap
+  # We start 3 replicas by default.
+  # -------------------------------------------------------
+  app:
+    build:
+      context: ../exercise-01-single-server-limit
+      dockerfile: Dockerfile
+    # NO ports mapping here — only Nginx is exposed.
+    # The app containers talk to Nginx via Docker's internal network.
+    expose:
+      - "8080"
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

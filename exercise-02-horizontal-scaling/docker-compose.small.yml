@@ -1,0 +1,30 @@
+# =============================================================
+# Part A - Vertical Scaling: SMALL (t2.micro equivalent)
+# =============================================================
+# This is the same as Exercise 01 — our baseline.
+# 0.5 CPU, 256MB RAM, 128MB JVM heap.
+#
+# Usage:
+#   docker compose -f docker-compose.small.yml up --build
+# =============================================================
+
+services:
+  app:
+    build:
+      context: ../exercise-01-single-server-limit
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - JAVA_OPTS=-Xmx128m -Xms64m -XX:MaxMetaspaceSize=64m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

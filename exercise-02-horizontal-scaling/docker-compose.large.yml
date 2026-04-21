@@ -1,0 +1,33 @@
+# =============================================================
+# Part A - Vertical Scaling: LARGE (t2.medium equivalent)
+# =============================================================
+# Doubled resources again from MEDIUM.
+# 2 CPUs, 1GB RAM, 512MB JVM heap.
+# Also increased thread pool and DB connections to use the extra resources.
+#
+# Usage:
+#   docker compose -f docker-compose.large.yml up --build
+# =============================================================
+
+services:
+  app:
+    build:
+      context: ../exercise-01-single-server-limit
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m -XX:MaxMetaspaceSize=128m
+      - SERVER_TOMCAT_THREADS_MAX=100
+      - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=20
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1024M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

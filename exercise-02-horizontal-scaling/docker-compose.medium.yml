@@ -1,0 +1,30 @@
+# =============================================================
+# Part A - Vertical Scaling: MEDIUM (t2.small equivalent)
+# =============================================================
+# Doubled resources from SMALL.
+# 1 CPU, 512MB RAM, 256MB JVM heap.
+#
+# Usage:
+#   docker compose -f docker-compose.medium.yml up --build
+# =============================================================
+
+services:
+  app:
+    build:
+      context: ../exercise-01-single-server-limit
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - JAVA_OPTS=-Xmx256m -Xms128m -XX:MaxMetaspaceSize=128m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

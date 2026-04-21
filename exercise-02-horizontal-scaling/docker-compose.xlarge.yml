@@ -1,0 +1,36 @@
+# =============================================================
+# Part A - Vertical Scaling: XLARGE (t2.xlarge equivalent)
+# =============================================================
+# Doubled resources again from LARGE.
+# 4 CPUs, 2GB RAM, 1GB JVM heap.
+# Thread pool and DB connections scaled up too.
+#
+# The question: is this 4x better than SMALL? 2x better than LARGE?
+# Or are we seeing diminishing returns?
+#
+# Usage:
+#   docker compose -f docker-compose.xlarge.yml up --build
+# =============================================================
+
+services:
+  app:
+    build:
+      context: ../exercise-01-single-server-limit
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - JAVA_OPTS=-Xmx1024m -Xms512m -XX:MaxMetaspaceSize=256m
+      - SERVER_TOMCAT_THREADS_MAX=200
+      - SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=40
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2048M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
