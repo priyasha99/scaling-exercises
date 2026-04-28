@@ -16,12 +16,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JAVA_OPTS=-Xmx128m -Xms64m -XX:MaxMetaspaceSize=64m
+      - JAVA_OPTS=-Xmx128m -Xms64m -XX:MaxMetaspaceSize=128m
     deploy:
       resources:
         limits:
           cpus: "0.5"
-          memory: 256M
+          memory: 384M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
       interval: 10s
