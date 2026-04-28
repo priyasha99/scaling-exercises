@@ -101,16 +101,6 @@ Here are the results from our benchmark run (your numbers will differ based on h
 | Timeouts | 1,694 | 16 | 0 | 0 |
 | Under 2s | 2% | 11% | 74% | 87% |
 
-Fill in your own results here for comparison:
-
-| Metric | SMALL (0.5 CPU) | MEDIUM (1 CPU) | LARGE (2 CPU) | XLARGE (4 CPU) |
-|---|---|---|---|---|
-| Median response | | | | |
-| p95 | | | | |
-| Error rate | | | | |
-| Requests/sec | | | | |
-| Timeouts | | | | |
-
 ### What to Observe
 
 #### SMALL → MEDIUM: The Easy Win (2.7x throughput)
