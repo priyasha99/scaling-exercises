@@ -11,6 +11,12 @@
 
 **Prerequisites:** Complete Exercise 01 first. You need to have seen the single server break.
 
+**Important — consistent results across machines:** Your results will vary depending on your hardware, background processes, and container runtime (Docker Desktop vs Rancher Desktop vs Colima). For the most consistent experience across a team, ensure your container runtime VM is allocated at least **4 CPUs and 4GB RAM**:
+- **Docker Desktop:** Settings → Resources → CPUs / Memory
+- **Rancher Desktop:** Preferences → Virtual Machine → CPUs / Memory
+
+The absolute numbers don't matter — the *pattern* (diminishing returns, throughput collapse) will be the same on any machine.
+
 ---
 
 ## Part A: Vertical Scaling (Bigger Box)
@@ -24,7 +30,7 @@ Client ──► [ App Server ] ──► DB
               ▲
               │
          Make this bigger:
-         SMALL  → 0.5 CPU,  256MB
+         SMALL  → 0.5 CPU,  384MB
          MEDIUM → 1 CPU,    512MB   (same as Exercise 01)
          LARGE  → 2 CPUs,   1GB
          XLARGE → 4 CPUs,   2GB
@@ -82,11 +88,22 @@ K6_WEB_DASHBOARD=true k6 run 00-vertical-benchmark.js
 docker compose -f docker-compose.xlarge.yml down
 ```
 
-### What to Record
+### Reference Results
 
-After each run, fill in this table with your results:
+Here are the results from our benchmark run (your numbers will differ based on hardware, but the pattern will be the same):
 
-| Metric | SMALL (0.5 CPU, 256MB) | MEDIUM (1 CPU, 512MB) | LARGE (2 CPU, 1GB) | XLARGE (4 CPU, 2GB) |
+| Metric | SMALL (0.5 CPU) | MEDIUM (1 CPU) | LARGE (2 CPU) | XLARGE (4 CPU) |
+|---|---|---|---|---|
+| Median response | 15,000ms | 5,200ms | 1,237ms | 232ms |
+| p95 | 15,000ms | 7,823ms | 3,475ms | 3,367ms |
+| Error rate | 6.15% | 0.47% | 0.09% | 1.02% |
+| Requests/sec | 15.9 | 43.1 | 129.9 | 203.2 |
+| Timeouts | 1,694 | 16 | 0 | 0 |
+| Under 2s | 2% | 11% | 74% | 87% |
+
+Fill in your own results here for comparison:
+
+| Metric | SMALL (0.5 CPU) | MEDIUM (1 CPU) | LARGE (2 CPU) | XLARGE (4 CPU) |
 |---|---|---|---|---|
 | Median response | | | | |
 | p95 | | | | |
@@ -96,13 +113,36 @@ After each run, fill in this table with your results:
 
 ### What to Observe
 
-- **SMALL → MEDIUM:** Big improvement. Doubling resources roughly doubles capacity. This feels great.
-- **MEDIUM → LARGE:** Good improvement, but probably not 2x. More like 1.5x. Diminishing returns start.
-- **LARGE → XLARGE:** Some improvement, but you're paying 2x more for much less than 2x gain. The app's thread model, GC pauses, and lock contention become the bottleneck — not raw CPU/RAM.
+#### SMALL → MEDIUM: The Easy Win (2.7x throughput)
 
-**The key insight:** Vertical scaling has an asymptotic ceiling. No matter how big you make the box, a single JVM with a single thread pool and a single connection pool can only do so much. And in the real world, there's a literal hardware limit — you can't buy a server with 1000 CPUs.
+Doubling from 0.5 to 1 CPU gave 2.7x throughput (15.9 → 43.1 req/s). Median dropped from 15,000ms (the timeout ceiling — most requests never completed) to 5,200ms. Timeouts fell from 1,694 to just 16. This is the phase where vertical scaling feels magical. You upgrade, things get dramatically better, everyone's happy.
 
-**The cost argument:** If SMALL costs $X/month, XLARGE costs ~8X/month (4x CPU, 8x RAM). But it doesn't deliver 8x the performance. This is the economic argument for horizontal scaling.
+#### MEDIUM → LARGE: Still Good, Notice the Pattern (3x throughput)
+
+Doubling to 2 CPUs gave 3x throughput (43.1 → 129.9 req/s). The median dropped to 1.2 seconds. Timeouts disappeared entirely. This is the sweet spot — we also scaled the thread pool (50 → 100) and DB connections (10 → 20) to actually use the extra resources. Without increasing those, the extra CPU would have sat idle.
+
+#### LARGE → XLARGE: Diminishing Returns (only 1.56x throughput)
+
+We doubled CPU again (2 → 4 cores), doubled RAM (1GB → 2GB), and doubled thread pool (100 → 200) and DB connections (20 → 40). The result? Only 1.56x throughput improvement for 2x the resources. We paid double and got half the expected return.
+
+Something unexpected: the error rate actually went **up** from 0.09% to 1.02%. With 200 threads competing for CPU and locks, the overhead of context-switching and contention grew. More threads doesn't always mean better.
+
+The p95 tells the real story — LARGE had 3,475ms, XLARGE had 3,367ms. Essentially the same. The heavy `/stats` endpoint is single-threaded, so 4 cores don't make an individual request faster. More cores improve *concurrency* (handling more requests at once), not *individual request speed*.
+
+#### The Key Insight
+
+Vertical scaling has an asymptotic ceiling. No matter how big you make the box, a single JVM with a single thread pool and a single connection pool can only do so much. And in the real world, there's a literal hardware limit — you can't buy a server with 1000 CPUs.
+
+#### The Cost Argument
+
+| Tier | Approx. AWS monthly cost |
+|---|---|
+| SMALL (t3.micro) | ~$8 |
+| MEDIUM (t3.small) | ~$17 |
+| LARGE (t3.medium) | ~$34 |
+| XLARGE (t3.xlarge) | ~$134 |
+
+XLARGE costs ~4x more than LARGE but delivers only 1.56x the throughput. The cost per request gets progressively worse. Meanwhile, three MEDIUM instances behind a load balancer cost ~$67 total (3 × $17 + $16 ALB). That's half the price of XLARGE — let's see if it performs better (spoiler: it does).
 
 ---
 
@@ -222,13 +262,13 @@ After running both parts, fill in the final comparison:
 
 | Config | CPUs | RAM | Median | p95 | Req/sec | Errors | Cost analogy |
 |---|---|---|---|---|---|---|---|
-| SMALL (vertical) | 0.5 | 256MB | | | | | $25/mo |
-| MEDIUM (vertical) | 1 | 512MB | | | | | $50/mo |
-| LARGE (vertical) | 2 | 1GB | | | | | $100/mo |
-| XLARGE (vertical) | 4 | 2GB | | | | | $200/mo |
-| 3x MEDIUM (horizontal) | 3 | 1.5GB | | | | | $150/mo + LB |
+| SMALL (vertical) | 0.5 | 384MB | 15,000ms | 15,000ms | 15.9 | 6.15% | ~$8/mo |
+| MEDIUM (vertical) | 1 | 512MB | 5,200ms | 7,823ms | 43.1 | 0.47% | ~$17/mo |
+| LARGE (vertical) | 2 | 1GB | 1,237ms | 3,475ms | 129.9 | 0.09% | ~$34/mo |
+| XLARGE (vertical) | 4 | 2GB | 232ms | 3,367ms | 203.2 | 1.02% | ~$134/mo |
+| 3x MEDIUM (horizontal) | 3 | 1.5GB | ??? | ??? | ??? | ??? | ~$67/mo |
 
-The 3x MEDIUM horizontal setup uses FEWER total resources than XLARGE but likely performs BETTER. That's the economic and technical argument for horizontal scaling.
+The 3x MEDIUM horizontal setup uses FEWER total resources than XLARGE and costs HALF the price. Fill in the horizontal numbers after running Part B — if it outperforms XLARGE, that's the economic and technical argument for horizontal scaling.
 
 ---
 
