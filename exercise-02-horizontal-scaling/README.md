@@ -196,15 +196,15 @@ K6_WEB_DASHBOARD=true k6 run 01-same-load-more-servers.js
 
 **Compare against your Exercise 01 Stage 3 results:**
 
-| Metric | Exercise 01 (1 server) | 3 servers + LB |
-|---|---|---|
-| Median | 7,462ms | ??? |
-| p90 | 13,403ms | ??? |
-| p95 | 14,630ms | ??? |
-| Errors | 5.31% | ??? |
-| Timeouts | 1,631 | ??? |
-| Requests/sec | 36.6 | ??? |
-| Under 2s | 16% | ??? |
+| Metric | Exercise 01 (1 server) | 3 servers + LB | Improvement |
+|---|---|---|---|
+| Median | 7,462ms | 248ms | **30x faster** |
+| p90 | 13,403ms | 4,356ms | 3x faster |
+| p95 | 14,630ms | 5,345ms | 2.7x faster |
+| Errors | 5.31% | 0.03% | **177x fewer** |
+| Timeouts | 1,631 | 3 | **544x fewer** |
+| Requests/sec | 36.6 | 166.7 | **4.6x throughput** |
+| Under 2s | 16% | 72% | **4.5x more** |
 
 #### Test 2: Push Beyond — Find the New Ceiling
 
