@@ -239,9 +239,11 @@ docker compose up --scale app=5 --no-recreate -d
 docker compose up --scale app=8 --no-recreate -d
 ```
 
+**Note:** New app containers take ~30 seconds to start (JVM boot + data seeding). The Nginx config uses Docker's DNS resolver (`resolver 127.0.0.11 valid=10s`) so it automatically discovers new containers within ~10 seconds of them being healthy. You'll see the traffic spread across the new containers in `docker stats`. If you scale down, Nginx handles the removed containers gracefully via its proxy timeouts.
+
 **What to watch on the dashboard:**
 - Scaling to 1: response times spike, errors appear (back to Exercise 01!)
-- Scaling to 5: response times drop, errors clear
+- Scaling to 5: response times drop, errors clear (after ~30s JVM startup delay)
 - Scaling to 8: does it improve much over 5? (Probably not — at some point your laptop's physical CPU is the limit)
 
 ---
@@ -256,15 +258,31 @@ After running both parts, fill in the final comparison:
 | MEDIUM (vertical) | 1 | 512MB | 5,200ms | 7,823ms | 43.1 | 0.47% | ~$17/mo |
 | LARGE (vertical) | 2 | 1GB | 1,237ms | 3,475ms | 129.9 | 0.09% | ~$34/mo |
 | XLARGE (vertical) | 4 | 2GB | 232ms | 3,367ms | 203.2 | 1.02% | ~$134/mo |
-| 3x MEDIUM (horizontal) | 3 | 1.5GB | ??? | ??? | ??? | ??? | ~$67/mo |
+| 3x MEDIUM (horizontal) | 3 | 1.5GB | 3,018ms | 8,874ms | 127.2 | 0.45% | ~$67/mo |
 
-The 3x MEDIUM horizontal setup uses FEWER total resources than XLARGE and costs HALF the price. Fill in the horizontal numbers after running Part B — if it outperforms XLARGE, that's the economic and technical argument for horizontal scaling.
+### What the Numbers Say
+
+XLARGE wins on raw throughput (203 vs 127 req/s) and median latency (232ms vs 3,018ms) — a single JVM with 4 cores and 200 threads can parallelize aggressively for short bursts. But the comparison isn't apples-to-apples: the horizontal test (03-scale-live) sustained peak load for 3 minutes vs 60 seconds for the vertical benchmark, giving more time for thread saturation and GC pressure to accumulate.
+
+The fairer comparison is Test 1 (01-same-load-more-servers, same script shape as Exercise 01's Stage 3):
+
+| Config | Median | p95 | Req/sec | Errors | Timeouts |
+|---|---|---|---|---|---|
+| XLARGE (vertical) | 232ms | 3,367ms | 203.2 | 1.02% | 0 |
+| 3x MEDIUM (horizontal) | 248ms | 5,345ms | 166.7 | 0.03% | 3 |
+| Single MEDIUM (Exercise 01) | 7,462ms | 14,630ms | 36.6 | 5.31% | 1,631 |
+
+The real argument for horizontal scaling isn't raw speed — it's **economics, reliability, and headroom**:
+- **Half the cost:** 3x MEDIUM costs ~$67/mo vs ~$134/mo for XLARGE
+- **Lower error rate:** 0.03% vs 1.02% — three isolated JVMs don't share contention
+- **No ceiling:** You can add a 4th, 5th, 10th server. XLARGE is already near the hardware limit
+- **Fault tolerance:** If one server crashes, two still serve traffic. If XLARGE crashes, everything is down
 
 ---
 
 ## Discussion Questions
 
-1. **Did XLARGE (4 CPU, 2GB) outperform 3x MEDIUM (3 CPU, 1.5GB)?** If not, why? What makes three separate JVMs more efficient than one big one?
+1. **XLARGE had higher throughput (203 vs 127-167 req/s), but 3x MEDIUM had fewer errors (0.03% vs 1.02%).** Why? What makes three separate JVMs more reliable than one big one, even if the big one is faster?
 
 2. **During Test 3, when you scaled from 1 to 5 servers, how quickly did performance improve?** Was it instant, or did it take a few seconds? What was happening during that transition? (Hint: JVM startup time, health check intervals)
 
