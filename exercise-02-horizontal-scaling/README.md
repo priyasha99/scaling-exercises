@@ -232,14 +232,19 @@ K6_WEB_DASHBOARD=true k6 run 03-scale-live.js
 # Scale DOWN to 1 server — watch metrics degrade
 docker compose up --scale app=1 --no-recreate -d
 
-# Scale UP to 5 servers — watch metrics recover
-docker compose up --scale app=5 --no-recreate -d
+# Scale UP to 5 servers — wait for JVMs to boot, then reload Nginx
+docker compose up --scale app=5 --no-recreate -d && sleep 35 && docker compose exec nginx nginx -s reload
 
-# Scale to 8 servers — diminishing returns?
-docker compose up --scale app=8 --no-recreate -d
+# Scale to 8 servers (may hit your laptop's physical CPU limit)
+docker compose up --scale app=8 --no-recreate -d && sleep 35 && docker compose exec nginx nginx -s reload
 ```
 
-**Note:** New app containers take ~30 seconds to start (JVM boot + data seeding). The Nginx config uses Docker's DNS resolver (`resolver 127.0.0.11 valid=10s`) so it automatically discovers new containers within ~10 seconds of them being healthy. You'll see the traffic spread across the new containers in `docker stats`. If you scale down, Nginx handles the removed containers gracefully via its proxy timeouts.
+**What's happening in that command:**
+1. `docker compose up --scale app=5` — starts 2 new app containers
+2. `sleep 35` — waits for JVMs to boot, load classes, and seed 5,000 products (~30s)
+3. `docker compose exec nginx nginx -s reload` — gracefully reloads Nginx so it re-resolves DNS and discovers the new containers. This is a zero-downtime reload: old worker processes finish handling in-flight requests while new workers start with the updated backend list
+
+**Note:** Nginx uses passive health checks (`max_fails=2 fail_timeout=30s`). If a new container isn't fully ready when Nginx discovers it, the first 2 requests to it will fail — but `proxy_next_upstream` silently retries them on a healthy backend, so clients don't see errors. After 30 seconds, Nginx tries the new container again and it joins the rotation.
 
 **What to watch on the dashboard:**
 - Scaling to 1: response times spike, errors appear (back to Exercise 01!)
