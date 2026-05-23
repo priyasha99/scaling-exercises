@@ -257,13 +257,13 @@ docker compose up --scale app=8 --no-recreate -d && sleep 35 && docker compose e
 
 After running both parts, fill in the final comparison:
 
-| Config | CPUs | RAM | Median | p95 | Req/sec | Errors | Cost analogy |
-|---|---|---|---|---|---|---|---|
-| SMALL (vertical) | 0.5 | 384MB | 15,000ms | 15,000ms | 15.9 | 6.15% | ~$8/mo |
-| MEDIUM (vertical) | 1 | 512MB | 5,200ms | 7,823ms | 43.1 | 0.47% | ~$17/mo |
-| LARGE (vertical) | 2 | 1GB | 1,237ms | 3,475ms | 129.9 | 0.09% | ~$34/mo |
-| XLARGE (vertical) | 4 | 2GB | 232ms | 3,367ms | 203.2 | 1.02% | ~$134/mo |
-| 3x MEDIUM (horizontal) | 3 | 1.5GB | 3,018ms | 8,874ms | 127.2 | 0.45% | ~$67/mo |
+| Config | CPUs | RAM | Threads | Median | p95 | Req/sec | Errors | Cost analogy |
+|---|---|---|---|---|---|---|---|---|
+| SMALL (vertical) | 0.5 | 384MB | 50 | 15,000ms | 15,000ms | 15.9 | 6.15% | ~$8/mo |
+| MEDIUM (vertical) | 1 | 512MB | 50 | 5,200ms | 7,823ms | 43.1 | 0.47% | ~$17/mo |
+| LARGE (vertical) | 2 | 1GB | 100 | 1,237ms | 3,475ms | 129.9 | 0.09% | ~$34/mo |
+| XLARGE (vertical) | 4 | 2GB | 200 | 232ms | 3,367ms | 203.2 | 1.02% | ~$134/mo |
+| 3x MEDIUM (horizontal) | 3 | 1.5GB | 150 (50 x 3) | 3,018ms | 8,874ms | 127.2 | 0.45% | ~$67/mo |
 
 ### What the Numbers Say
 
