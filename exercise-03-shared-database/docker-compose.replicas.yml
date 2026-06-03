@@ -125,6 +125,22 @@ services:
       start_period: 30s
 
   # -------------------------------------------------------
+  # pgAdmin - Database GUI
+  # -------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
+  # -------------------------------------------------------
   # Nginx Load Balancer
   # -------------------------------------------------------
   nginx:
@@ -180,3 +196,4 @@ volumes:
   pgdata-primary:
   pgdata-replica1:
   pgdata-replica2:
+  pgadmin-data:
