@@ -61,6 +61,12 @@ public class DataSourceConfig {
     @Bean
     @Primary
     public DataSource dataSource() {
+        System.out.println("====================================================");
+        System.out.println("[DataSourceConfig] Creating READ/WRITE routing DataSource");
+        System.out.println("[DataSourceConfig] Primary: " + primaryUrl);
+        System.out.println("[DataSourceConfig] Replica: " + replicaUrl);
+        System.out.println("====================================================");
+
         // 1. Create separate connection pools for primary and replica
         DataSource primaryDs = createHikariDataSource(
                 "Primary-HikariPool", primaryUrl, primaryUsername, primaryPassword, primaryPoolSize);
@@ -74,6 +80,11 @@ public class DataSourceConfig {
         targetDataSources.put("replica", replicaDs);
         routingDs.setTargetDataSources(targetDataSources);
         routingDs.setDefaultTargetDataSource(primaryDs); // Fallback to primary if no transaction context
+
+        // CRITICAL: Initialize the routing DataSource.
+        // AbstractRoutingDataSource resolves target DataSources in afterPropertiesSet().
+        // Without this call, Hibernate gets "DataSource router not initialized" on startup.
+        routingDs.afterPropertiesSet();
 
         // 3. Wrap in LazyConnectionDataSourceProxy
         // This is CRITICAL. Without it, the connection is acquired before

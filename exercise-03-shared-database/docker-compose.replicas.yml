@@ -69,7 +69,9 @@ services:
   postgres-replica-1:
     image: postgres:16-alpine
     environment:
-      PGUSER: replicator
+      # Don't set PGUSER here — it causes pg_isready to try
+      # connecting to a database named "replicator" which doesn't exist.
+      # The replication credentials are passed directly in the script.
       PGPASSWORD: repl_password
     ports:
       - "5433:5432"
@@ -99,7 +101,6 @@ services:
   postgres-replica-2:
     image: postgres:16-alpine
     environment:
-      PGUSER: replicator
       PGPASSWORD: repl_password
     ports:
       - "5434:5432"

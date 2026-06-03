@@ -3,6 +3,8 @@ package com.scaling.exercise.config;
 import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * Routes database connections based on transaction type:
  *   - @Transactional(readOnly = true)  → "replica"
@@ -25,14 +27,25 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  */
 public class ReadWriteRoutingDataSource extends AbstractRoutingDataSource {
 
+    private final AtomicLong primaryCount = new AtomicLong(0);
+    private final AtomicLong replicaCount = new AtomicLong(0);
+
     @Override
     protected Object determineCurrentLookupKey() {
         boolean isReadOnly = TransactionSynchronizationManager.isCurrentTransactionReadOnly();
         String target = isReadOnly ? "replica" : "primary";
 
-        // Log routing decisions (useful for debugging, disable in production)
-        if (System.getProperty("log.datasource.routing", "false").equals("true")) {
-            System.out.println("[DataSource Routing] readOnly=" + isReadOnly + " → " + target);
+        // Count routing decisions for monitoring
+        if (isReadOnly) {
+            long count = replicaCount.incrementAndGet();
+            if (count <= 5 || count % 500 == 0) {
+                System.out.println("[DataSource Routing] → REPLICA (total: replica=" + count + ", primary=" + primaryCount.get() + ")");
+            }
+        } else {
+            long count = primaryCount.incrementAndGet();
+            if (count <= 5 || count % 500 == 0) {
+                System.out.println("[DataSource Routing] → PRIMARY (total: replica=" + replicaCount.get() + ", primary=" + count + ")");
+            }
         }
 
         return target;
