@@ -1,0 +1,187 @@
+# =============================================================
+# Exercise 04 Part B/C - Redis + Read Replicas
+# =============================================================
+# Full stack: Redis caching + PostgreSQL read/write splitting.
+#
+# Request flow:
+#   1. Check Redis cache
+#   2. HIT  → return instantly (no DB connection needed)
+#   3. MISS → route via ReadWriteRoutingDataSource:
+#        readOnly=true  → replica
+#        readOnly=false → primary
+#   4. Store result in Redis for next time
+#
+# Architecture:
+#
+#   Client → [ Nginx ] → [ App 1 ] → [ Redis ] cache HIT → done
+#                       → [ App 2 ]      ↓ cache MISS
+#                       → [ App 3 ] ──writes──→ [ PG Primary ]
+#                                   ──reads───→ [ PG Replica ]  ← WAL
+#
+# Usage:
+#   docker compose -f docker-compose.replicas.yml up --build
+# =============================================================
+
+services:
+  # -------------------------------------------------------
+  # PostgreSQL Primary (writes)
+  # -------------------------------------------------------
+  postgres-primary:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: productdb
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    ports:
+      - "5432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    command: >
+      postgres
+      -c max_connections=50
+      -c shared_buffers=128MB
+      -c work_mem=4MB
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=4
+      -c hot_standby=on
+      -c log_min_duration_statement=1000
+    volumes:
+      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/01-init-replication.sh
+      - pgdata-primary:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d productdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # -------------------------------------------------------
+  # PostgreSQL Replica (reads — only on cache MISS)
+  # -------------------------------------------------------
+  postgres-replica:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: repl_password
+    ports:
+      - "5433:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    volumes:
+      - ./postgres/setup-replica.sh:/setup-replica.sh
+      - pgdata-replica:/var/lib/postgresql/data
+    entrypoint: ["/bin/bash", "/setup-replica.sh"]
+    command: ["postgres-primary"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d productdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------
+  # Redis (shared cache)
+  # -------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    command: >
+      redis-server
+      --maxmemory 200mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------
+  # pgAdmin - Database GUI
+  # -------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
+  # -------------------------------------------------------
+  # Nginx Load Balancer
+  # -------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+
+  # -------------------------------------------------------
+  # App Servers with Redis caching + read/write routing
+  # -------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    expose:
+      - "8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: replicas
+      DB_PRIMARY_HOST: postgres-primary
+      DB_REPLICA_HOST: postgres-replica
+      DB_USER: app
+      DB_PASSWORD: app_password
+      DB_HOST: postgres-primary
+      REDIS_HOST: redis
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      postgres-replica:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  pgdata-primary:
+  pgdata-replica:
+  pgadmin-data:
