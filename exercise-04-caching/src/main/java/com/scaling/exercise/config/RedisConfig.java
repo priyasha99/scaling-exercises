@@ -40,6 +40,15 @@ import java.util.Map;
  * 3. CACHE NAMES: Each cache is a separate namespace in Redis.
  *    "products::Electronics" is different from "search::Electronics".
  *    This lets us invalidate specific caches without clearing everything.
+ *
+ * SERIALIZATION GOTCHAS:
+ * - Jackson needs JavaTimeModule to handle LocalDateTime (Java 8+ dates)
+ * - Jackson needs type info (@class) so it knows which Java class to
+ *   reconstruct when reading back from Redis
+ * - NON_FINAL typing works with regular classes but NOT with Java records
+ *   (records are implicitly final) — that's why ProductStats is a POJO
+ * - Optional doesn't roundtrip cleanly — that's why getProductById
+ *   returns Product (nullable) instead of Optional<Product>
  */
 @Configuration
 @EnableCaching
@@ -51,11 +60,20 @@ public class RedisConfig {
         System.out.println("[RedisConfig] Configuring Redis cache manager");
         System.out.println("====================================================");
 
-        // Jackson ObjectMapper configured for Redis serialization
+        // Custom ObjectMapper for Redis serialization
         ObjectMapper mapper = new ObjectMapper();
+
+        // JavaTimeModule: required for LocalDateTime in Product entity.
+        // Without this, Jackson throws "no serializer found for class
+        // java.time.LocalDateTime" and the cache write fails with a 500.
         mapper.registerModule(new JavaTimeModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        // Enable type info so Jackson knows what class to deserialize into
+
+        // Type info: tells Jackson to embed @class metadata in the JSON.
+        // Without this, Jackson serializes fine but can't deserialize —
+        // it doesn't know that {"name":"Widget",...} should be a Product.
+        // NON_FINAL adds type info to non-final classes (Product, ProductStats,
+        // ArrayList, etc.) but not to final classes (String, BigDecimal).
         mapper.activateDefaultTyping(
                 LaissezFaireSubTypeValidator.instance,
                 ObjectMapper.DefaultTyping.NON_FINAL,
@@ -75,7 +93,6 @@ public class RedisConfig {
                 .disableCachingNullValues();
 
         // Per-cache TTL overrides
-        // Different data has different staleness tolerance
         Map<String, RedisCacheConfiguration> cacheConfigs = new HashMap<>();
 
         // Product by ID — rarely changes, cache for 10 minutes

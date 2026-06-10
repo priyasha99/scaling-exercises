@@ -54,8 +54,7 @@ On a cache MISS:
 - **RedisConfig.java:** NEW — configures cache manager with JSON serialization and per-cache TTLs
 - **ProductService.java:** Added `@Cacheable` on read methods, `@CacheEvict` on write method
 - **CacheMetrics.java:** NEW — tracks hit/miss counts per cache
-- **CacheHitInterceptor.java:** NEW — adds `X-Cache-Status` header to responses
-- **ProductController.java:** Added `/cache-stats` endpoint
+- **ProductController.java:** Added `/cache-stats` endpoint, sets `X-Cache-Status` header (HIT/MISS)
 - **docker-compose files:** Added Redis container
 
 ### Why Redis Instead of In-Memory Cache?
@@ -199,7 +198,7 @@ curl -s http://localhost/api/products/cache-stats | python3 -m json.tool
 ```bash
 docker compose -f docker-compose.replicas.yml exec redis redis-cli INFO stats | grep keyspace
 ```
-A high hit ratio (>80%) means caching is working well.
+The hit ratio depends on the number of unique keys per cache. Caches with few unique keys (category_stats has only 8) will have high hit rates. Caches with many unique keys (product has 5,000+ IDs) will have low hit rates in a short test. In production, traffic follows a power law — a few popular items get most requests — so hit rates are naturally higher.
 
 **PostgreSQL CPU:**
 Compare to Exercise 03 Test 4. With caching, the replica should be much less busy — most reads never reach it.
@@ -209,16 +208,18 @@ Should be lower too. `computeCategoryStats()` is the most CPU-heavy method, and 
 
 ### Reference Results — With Cache (500 VUs)
 
-*Run the test and fill in your results here.*
+| Metric | Ex03: Replicas, No Cache | Ex04: Replicas + Redis | Improvement |
+|---|---|---|---|
+| Median | 6,450ms | **3,530ms** | **1.8x faster** |
+| p95 | 15,000ms | 15,000ms | Same (timeout ceiling) |
+| Errors | 5.60% | **2.11%** | **2.6x fewer** |
+| Throughput | 40 req/s | **56 req/s** | **1.4x higher** |
+| Cache hits | N/A | 2,241 | — |
+| Cache misses | N/A | 3,561 | — |
+| Cache hit rate | N/A | ~39% | — |
+| Under 2s | 33% | 39% | Slightly better |
 
-| Metric | Ex03: Replicas, No Cache | Ex04: Replicas + Redis |
-|---|---|---|
-| Median | 6,450ms | *your result* |
-| p95 | 15,000ms | *your result* |
-| Errors | 5.60% | *your result* |
-| Throughput | 40 req/s | *your result* |
-| Cache hit rate | N/A | *your result* |
-| Under 2s | 33% | *your result* |
+The hit rate (~39%) is modest because the test uses 5,000 random product IDs — most are only requested once during the test. The category_stats and search caches (8 categories, 10 search terms) have much higher effective hit rates, but they're mixed into the overall number. In production where traffic follows a power law (a few popular products get most requests), hit rates are naturally much higher.
 
 ---
 
@@ -266,14 +267,19 @@ K6_WEB_DASHBOARD=true k6 run 03-cache-invalidation.js
 
 ### Reference Results — Write-Heavy (500 VUs, 30% Writes)
 
-*Run the test and fill in your results here.*
-
 | Metric | Test 2 (10% writes) | Test 3 (30% writes) |
 |---|---|---|
-| Median | *your result* | *your result* |
-| Errors | *your result* | *your result* |
-| Throughput | *your result* | *your result* |
-| Cache hit rate | *your result* | *your result* |
+| Median | 3,530ms | **2,400ms** (faster!) |
+| Errors | 2.11% | **1.24%** (fewer!) |
+| Throughput | 56 req/s | **67 req/s** (higher!) |
+| Cache hits | 2,241 | 1,217 |
+| Cache misses | 3,561 | 4,736 |
+| Cache hit rate | ~39% | **~20%** (halved) |
+| Timeouts | 1,133 | 1,060 |
+
+**Surprising result:** The write-heavy test performed *better* despite a lower cache hit rate. Why? Because writes (a single INSERT) are cheap operations. The expensive operations are reads — search across 15,000 products, compute stats with 100 iterations of Math.sin per product. With 30% writes replacing some of those heavy reads, the total workload was actually lighter.
+
+This is an important lesson: **cache hit rate alone doesn't tell the full story.** What matters is *which* requests hit the cache. Caching one expensive `computeCategoryStats()` call saves more CPU time than caching ten cheap product-by-ID lookups.
 
 ### Cache Invalidation Strategies
 
@@ -296,9 +302,14 @@ Our approach is **evict on write** — simple, correct, but can over-evict (we c
 | Config | Median | Throughput | Errors | Under 2s |
 |---|---|---|---|---|
 | Ex03: Single PG (500 VUs) | 10,576ms | 28 req/s | 22.49% | 11% |
+| Ex03: 6 servers + PG (300 VUs) | 15,000ms | 20 req/s | 12.84% | 2% |
 | Ex03: Replicas (500 VUs) | 6,450ms | 40 req/s | 5.60% | 33% |
-| Ex04: Replicas + Redis (500 VUs) | *your result* | *your result* | *your result* | *your result* |
-| Ex04: Write-heavy 30% (500 VUs) | *your result* | *your result* | *your result* | *your result* |
+| **Ex04: Replicas + Redis (500 VUs)** | **3,530ms** | **56 req/s** | **2.11%** | **39%** |
+| Ex04: Write-heavy 30% (500 VUs) | 2,400ms | 67 req/s | 1.24% | 47% |
+
+The progression tells the story: shared database was the ceiling (28 req/s), adding servers made it worse (20 req/s), read replicas helped (40 req/s), and Redis caching pushed it further (56 req/s). From Exercise 03's bottleneck to Exercise 04's cached setup, throughput doubled and errors dropped 10x.
+
+The write-heavy test's better numbers are counterintuitive until you realize that writes are cheap (single INSERT) while reads are expensive (full table scans, CPU-heavy computations). Replacing expensive reads with cheap writes reduced the overall load, even though the cache was less effective.
 
 ---
 

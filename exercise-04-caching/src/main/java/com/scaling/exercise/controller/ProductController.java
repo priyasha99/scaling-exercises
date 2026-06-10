@@ -17,10 +17,12 @@ import java.util.Map;
  *
  * Every response includes:
  *   - X-Server-Id: which app server handled the request
- *   - X-Cache-Status: HIT or MISS (set by CacheHitInterceptor)
+ *   - X-Cache-Status: HIT or MISS (set after calling the service)
  *
- * New endpoint:
- *   - GET /api/products/cache-stats: shows hit/miss rates per cache
+ * The X-Cache-Status header is set BEFORE the response body is written.
+ * We call the service method first (which sets the thread-local status),
+ * then set the header, then return the result. This ensures the header
+ * is included even with chunked transfer encoding.
  */
 @RestController
 @RequestMapping("/api/products")
@@ -40,36 +42,60 @@ public class ProductController {
         this.serverId = hostname;
     }
 
+    /**
+     * Sets both X-Server-Id and X-Cache-Status headers.
+     * Must be called AFTER the service method returns but BEFORE
+     * returning the result (so headers are set before body is written).
+     */
+    private void setCacheHeaders(HttpServletResponse response) {
+        response.setHeader("X-Server-Id", serverId);
+        String cacheStatus = ProductService.getCacheStatus();
+        if (!"NONE".equals(cacheStatus)) {
+            response.setHeader("X-Cache-Status", cacheStatus);
+        }
+    }
+
     @GetMapping
     public List<Product> getAllProducts(HttpServletResponse response) {
-        response.setHeader("X-Server-Id", serverId);
-        return productService.getAllProducts();
+        ProductService.prepareCacheTracking();
+        List<Product> result = productService.getAllProducts();
+        setCacheHeaders(response);
+        return result;
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Product> getProduct(@PathVariable Long id, HttpServletResponse response) {
-        response.setHeader("X-Server-Id", serverId);
-        return productService.getProductById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        ProductService.prepareCacheTracking();
+        Product product = productService.getProductById(id);
+        setCacheHeaders(response);
+        if (product != null) {
+            return ResponseEntity.ok(product);
+        }
+        return ResponseEntity.notFound().build();
     }
 
     @GetMapping("/search")
     public List<Product> searchProducts(@RequestParam("q") String query, HttpServletResponse response) {
-        response.setHeader("X-Server-Id", serverId);
-        return productService.searchProducts(query);
+        ProductService.prepareCacheTracking();
+        List<Product> result = productService.searchProducts(query);
+        setCacheHeaders(response);
+        return result;
     }
 
     @GetMapping("/category/{category}")
     public List<Product> getByCategory(@PathVariable String category, HttpServletResponse response) {
-        response.setHeader("X-Server-Id", serverId);
-        return productService.getByCategory(category);
+        ProductService.prepareCacheTracking();
+        List<Product> result = productService.getByCategory(category);
+        setCacheHeaders(response);
+        return result;
     }
 
     @GetMapping("/stats/{category}")
     public ProductService.ProductStats getCategoryStats(@PathVariable String category, HttpServletResponse response) {
-        response.setHeader("X-Server-Id", serverId);
-        return productService.computeCategoryStats(category);
+        ProductService.prepareCacheTracking();
+        ProductService.ProductStats result = productService.computeCategoryStats(category);
+        setCacheHeaders(response);
+        return result;
     }
 
     @PostMapping
@@ -81,11 +107,6 @@ public class ProductController {
     /**
      * Cache statistics endpoint.
      * Shows hit/miss rates for each cache on THIS server.
-     *
-     * NOTE: Each app server has its own CacheMetrics counters.
-     * The cache itself (Redis) is shared, but the hit/miss counts
-     * are per-JVM. This is fine for observability — you can see
-     * which server is getting more cache hits based on traffic distribution.
      */
     @GetMapping("/cache-stats")
     public Map<String, Object> cacheStats() {

@@ -50,22 +50,58 @@ public class ProductService {
     private final CacheManager cacheManager;
 
     /**
-     * Thread-local flag to track whether the current request was a cache hit.
-     * Set to "HIT" before @Cacheable is called. If the method body executes,
-     * it was a miss, and we set it to "MISS". The controller reads this to
-     * set the X-Cache-Status response header.
+     * Thread-local to track cache hit/miss status for the current request.
+     * [0] = "HIT" or "MISS", [1] = cache name (set on miss, used for metrics)
      */
-    private static final ThreadLocal<String> cacheStatus = new ThreadLocal<>();
+    private static final ThreadLocal<String[]> cacheStatus = new ThreadLocal<>();
 
     public ProductService(ProductRepository productRepository, CacheManager cacheManager) {
         this.productRepository = productRepository;
         this.cacheManager = cacheManager;
     }
 
+    /**
+     * Called by CacheHitInterceptor BEFORE the controller method runs.
+     * Sets the thread-local to "HIT" optimistically. If a @Cacheable
+     * method body executes (miss), it will overwrite this to "MISS".
+     * No metrics are recorded here — only in the actual hit/miss paths.
+     */
+    public static void prepareCacheTracking() {
+        cacheStatus.set(new String[]{"HIT", null});
+    }
+
+    /**
+     * Called by CacheHitInterceptor AFTER the controller method runs.
+     * Returns the cache status and records the hit metric if applicable.
+     */
     public static String getCacheStatus() {
-        String status = cacheStatus.get();
+        String[] status = cacheStatus.get();
         cacheStatus.remove(); // Clean up thread-local
-        return status != null ? status : "NONE";
+
+        if (status == null) {
+            return "NONE";
+        }
+
+        // If it's still "HIT" and we have a cache name from a miss that
+        // was overwritten... no — if it's "HIT", the method body never ran,
+        // so status[1] is still null. We record a generic "cache" hit.
+        if ("HIT".equals(status[0]) && status[1] == null) {
+            // This was a genuine cache hit but we don't know which cache.
+            // The method body never executed, so we couldn't capture the name.
+            CacheMetrics.recordHit("overall");
+        }
+
+        return status[0];
+    }
+
+    /**
+     * Called inside @Cacheable method bodies to record a cache miss.
+     * If this method is called, the @Cacheable method body is executing,
+     * which means the cache didn't have the value.
+     */
+    private static void recordCacheMiss(String cacheName) {
+        cacheStatus.set(new String[]{"MISS", cacheName});
+        CacheMetrics.recordMiss(cacheName);
     }
 
     /**
@@ -78,8 +114,7 @@ public class ProductService {
     public List<Product> getAllProducts() {
         // If we get here, it's a cache MISS — the method body only
         // executes when the result isn't in Redis
-        cacheStatus.set("MISS");
-        CacheMetrics.recordMiss("all_products");
+        recordCacheMiss("all_products");
         System.out.println("[Cache MISS] all_products");
         return productRepository.findAll();
     }
@@ -88,14 +123,18 @@ public class ProductService {
      * Cache individual product by ID.
      * Key: product ID (e.g., "product::42")
      * TTL: 10 minutes (products rarely change)
+     *
+     * NOTE: Returns Product (not Optional) because Optional doesn't
+     * serialize/deserialize cleanly with Jackson + Redis type metadata.
+     * Returns null if not found — Spring's @Cacheable handles null
+     * gracefully (we configured disableCachingNullValues in RedisConfig).
      */
     @Cacheable(value = "product", key = "#id")
     @Transactional(readOnly = true)
-    public Optional<Product> getProductById(Long id) {
-        cacheStatus.set("MISS");
-        CacheMetrics.recordMiss("product");
+    public Product getProductById(Long id) {
+        recordCacheMiss("product");
         System.out.println("[Cache MISS] product::" + id);
-        return productRepository.findById(id);
+        return productRepository.findById(id).orElse(null);
     }
 
     /**
@@ -109,8 +148,7 @@ public class ProductService {
     @Cacheable(value = "search", key = "#keyword")
     @Transactional(readOnly = true)
     public List<Product> searchProducts(String keyword) {
-        cacheStatus.set("MISS");
-        CacheMetrics.recordMiss("search");
+        recordCacheMiss("search");
         System.out.println("[Cache MISS] search::" + keyword);
         return productRepository.searchByNameOrDescription(keyword);
     }
@@ -123,8 +161,7 @@ public class ProductService {
     @Cacheable(value = "products_by_category", key = "#category")
     @Transactional(readOnly = true)
     public List<Product> getByCategory(String category) {
-        cacheStatus.set("MISS");
-        CacheMetrics.recordMiss("products_by_category");
+        recordCacheMiss("products_by_category");
         System.out.println("[Cache MISS] products_by_category::" + category);
         return productRepository.findByCategory(category);
     }
@@ -145,8 +182,7 @@ public class ProductService {
     @Cacheable(value = "category_stats", key = "#category")
     @Transactional(readOnly = true)
     public ProductStats computeCategoryStats(String category) {
-        cacheStatus.set("MISS");
-        CacheMetrics.recordMiss("category_stats");
+        recordCacheMiss("category_stats");
         System.out.println("[Cache MISS] category_stats::" + category);
 
         List<Product> products = productRepository.findByCategory(category);
@@ -248,21 +284,51 @@ public class ProductService {
     }
 
     /**
-     * Mark a cache lookup as HIT. Called by CacheHitInterceptor
-     * when @Cacheable returns a cached value (method body didn't execute).
+     * POJO instead of record for Redis serialization compatibility.
+     *
+     * Java records don't have a no-arg constructor, which Jackson needs
+     * when deserializing with Redis type metadata (@class property).
+     * Jackson can serialize a record fine, but when reading it back
+     * from Redis, it fails because it can't construct the object.
+     *
+     * A regular class with a no-arg constructor + getters/setters works
+     * with any serialization strategy.
      */
-    public static void markCacheHit(String cacheName) {
-        cacheStatus.set("HIT");
-        CacheMetrics.recordHit(cacheName);
-    }
+    public static class ProductStats {
+        private String category;
+        private int productCount;
+        private BigDecimal totalInventoryValue;
+        private BigDecimal averagePrice;
+        private BigDecimal minPrice;
+        private BigDecimal maxPrice;
+        private int totalStock;
 
-    public record ProductStats(
-            String category,
-            int productCount,
-            BigDecimal totalInventoryValue,
-            BigDecimal averagePrice,
-            BigDecimal minPrice,
-            BigDecimal maxPrice,
-            int totalStock
-    ) {}
+        public ProductStats() {} // Required for Jackson deserialization
+
+        public ProductStats(String category, int productCount, BigDecimal totalInventoryValue,
+                            BigDecimal averagePrice, BigDecimal minPrice, BigDecimal maxPrice, int totalStock) {
+            this.category = category;
+            this.productCount = productCount;
+            this.totalInventoryValue = totalInventoryValue;
+            this.averagePrice = averagePrice;
+            this.minPrice = minPrice;
+            this.maxPrice = maxPrice;
+            this.totalStock = totalStock;
+        }
+
+        public String getCategory() { return category; }
+        public void setCategory(String category) { this.category = category; }
+        public int getProductCount() { return productCount; }
+        public void setProductCount(int productCount) { this.productCount = productCount; }
+        public BigDecimal getTotalInventoryValue() { return totalInventoryValue; }
+        public void setTotalInventoryValue(BigDecimal totalInventoryValue) { this.totalInventoryValue = totalInventoryValue; }
+        public BigDecimal getAveragePrice() { return averagePrice; }
+        public void setAveragePrice(BigDecimal averagePrice) { this.averagePrice = averagePrice; }
+        public BigDecimal getMinPrice() { return minPrice; }
+        public void setMinPrice(BigDecimal minPrice) { this.minPrice = minPrice; }
+        public BigDecimal getMaxPrice() { return maxPrice; }
+        public void setMaxPrice(BigDecimal maxPrice) { this.maxPrice = maxPrice; }
+        public int getTotalStock() { return totalStock; }
+        public void setTotalStock(int totalStock) { this.totalStock = totalStock; }
+    }
 }
