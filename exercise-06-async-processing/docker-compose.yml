@@ -1,0 +1,195 @@
+# =============================================================
+# Exercise 06 - Async Processing with RabbitMQ (No Replicas)
+# =============================================================
+# Adds RabbitMQ to the Exercise 05 stack.
+# Product creation goes through a message queue instead of
+# directly hitting the database.
+#
+# Architecture:
+#
+#   Client → [ Nginx ] → [ App 1 ] → publish → [ RabbitMQ ]
+#                       → [ App 2 ]               ↓ consume
+#                       → [ App 3 ] ←───────── [ Consumer ]
+#                                                  ↓
+#                           [ Redis ] ←── cache    ↓
+#                           [ PostgreSQL ] ←── INSERT
+#
+# Usage:
+#   docker compose up --build
+#
+# To run in SYNC mode (for baseline comparison):
+#   ASYNC_ENABLED=false docker compose up --build
+# =============================================================
+
+services:
+  # -------------------------------------------------------
+  # PostgreSQL (shared database)
+  # -------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: productdb
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_password
+    ports:
+      - "5432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    command: >
+      postgres
+      -c max_connections=50
+      -c shared_buffers=128MB
+      -c work_mem=4MB
+      -c log_min_duration_statement=1000
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d productdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # -------------------------------------------------------
+  # Redis (shared cache + JWT blacklist + async status)
+  # -------------------------------------------------------
+  # Now also stores async request status (QUEUED/PROCESSING/COMPLETED)
+  # with 10-minute TTL for the status polling endpoint.
+  # -------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    command: >
+      redis-server
+      --maxmemory 200mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------
+  # RabbitMQ (message broker)
+  # -------------------------------------------------------
+  # The management plugin gives us a web UI at port 15672.
+  # Default credentials: guest/guest
+  #
+  # Key things to observe in the UI:
+  #   - Queues tab: message rates, consumers connected
+  #   - product-creation-queue: main queue, messages in/out
+  #   - product-creation-dlq: dead letter queue, failed messages
+  # -------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"     # AMQP protocol
+      - "15672:15672"   # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------
+  # pgAdmin - Database GUI
+  # -------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -------------------------------------------------------
+  # Nginx Load Balancer
+  # -------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+
+  # -------------------------------------------------------
+  # App Servers (JWT + Redis + RabbitMQ)
+  # -------------------------------------------------------
+  # Each server is both a PRODUCER (API publishes messages)
+  # and a CONSUMER (background threads process messages).
+  # With 3 servers × 3-5 consumer threads = 9-15 parallel consumers.
+  #
+  # ASYNC_ENABLED controls the POST /api/products behavior:
+  #   true  → publish to RabbitMQ, return 202 (default)
+  #   false → direct DB insert, return 201 (sync baseline)
+  # -------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    expose:
+      - "8080"
+    environment:
+      DB_HOST: postgres
+      DB_USER: app
+      DB_PASSWORD: app_password
+      REDIS_HOST: redis
+      JWT_SECRET: beF/P6xbwWmyS+K9cqYeAdGpPAL0nhssO5wYRtlJler8EcBOnEuu4bBLThCr1hYV
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      ASYNC_ENABLED: ${ASYNC_ENABLED:-true}
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/products/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  pgdata:
+  pgadmin-data:
