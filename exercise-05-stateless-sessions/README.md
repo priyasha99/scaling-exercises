@@ -254,7 +254,6 @@ The key comparison is baseline (no auth) vs authenticated. JWT adds a tiny overh
 | p95 | 9,090ms | 10,340ms |
 | Throughput | 95 req/s | 86 req/s |
 | Errors | 3.59% | **0.41%** |
-| Cache hit rate | ~79% | — |
 | Auth failures (401) | — | **0** |
 
 **Key observations:**
