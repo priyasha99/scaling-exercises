@@ -220,13 +220,13 @@ docker compose -f docker-compose.replicas.yml exec redis redis-cli FLUSHALL
 
 ```bash
 cd loadtest
-K6_WEB_DASHBOARD=true k6 run 01-no-cache-baseline.js
+K6_WEB_DASHBOARD=true k6 run 01-no-auth-baseline.js
 ```
 
 #### Step 3: Run the authenticated test
 
 ```bash
-K6_WEB_DASHBOARD=true k6 run 02-with-cache.js
+K6_WEB_DASHBOARD=true k6 run 02-with-jwt-auth.js
 ```
 
 #### Step 4: Compare results
@@ -343,7 +343,7 @@ Solutions: short token lifetimes (15 min), force re-login on role change, or che
 ```bash
 # This test exercises the full token lifecycle:
 # login → requests → refresh → more requests → logout → verify blacklist
-K6_WEB_DASHBOARD=true k6 run 03-cache-invalidation.js
+K6_WEB_DASHBOARD=true k6 run 03-token-lifecycle.js
 ```
 
 Watch the custom metrics:
