@@ -44,9 +44,17 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final String serverId;
 
     public JwtAuthenticationFilter(JwtService jwtService) {
         this.jwtService = jwtService;
+        String hostname;
+        try {
+            hostname = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception e) {
+            hostname = "unknown";
+        }
+        this.serverId = hostname;
     }
 
     @Override
@@ -54,6 +62,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
+
+        // Set X-Server-Id on EVERY response — shows which server handled it
+        response.setHeader("X-Server-Id", serverId);
 
         String authHeader = request.getHeader("Authorization");
 

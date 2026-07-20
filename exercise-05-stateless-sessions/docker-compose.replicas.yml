@@ -160,7 +160,7 @@ services:
       DB_PASSWORD: app_password
       DB_HOST: postgres-primary
       REDIS_HOST: redis
-      JWT_SECRET: my-super-secret-key-that-is-at-least-256-bits-long-for-hmac-sha
+      JWT_SECRET: beF/P6xbwWmyS+K9cqYeAdGpPAL0nhssO5wYRtlJler8EcBOnEuu4bBLThCr1hYV
     deploy:
       replicas: 3
       resources:
