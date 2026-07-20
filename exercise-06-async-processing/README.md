@@ -185,11 +185,12 @@ K6_WEB_DASHBOARD=true k6 run loadtest/01-sync-baseline.js
 
 | Metric | Result |
 |--------|--------|
-| Median latency | |
-| P95 latency | |
-| Requests/sec | |
-| Error rate | |
-| Write latency (median) | |
+| Median latency | 6,110ms |
+| P95 latency | 10,050ms |
+| Requests/sec | 64 req/s |
+| Error rate | 1.26% |
+| Write latency (median) | 6,113ms |
+| Read latency (median) | 6,091ms |
 
 ```bash
 docker compose down
@@ -207,12 +208,13 @@ K6_WEB_DASHBOARD=true k6 run loadtest/02-async-comparison.js
 
 | Metric | Result |
 |--------|--------|
-| Median latency | |
-| P95 latency | |
-| Requests/sec | |
-| Error rate | |
-| Write latency (median) | |
-| Status polls completed | |
+| Median latency | 4,430ms |
+| P95 latency | 10,900ms |
+| Requests/sec | **78 req/s** (+22%) |
+| Error rate | 3.01% |
+| Write latency (median) | **3,610ms** (−41%) |
+| Read latency (median) | 4,993ms |
+| Status polls | 253 (3 completed, 250 still queued) |
 
 ### Test 3: Async Lifecycle
 
@@ -222,12 +224,29 @@ K6_WEB_DASHBOARD=true k6 run loadtest/03-async-lifecycle.js
 
 | Metric | Result |
 |--------|--------|
-| Median latency | |
-| Error rate | |
-| Async completed | |
-| Async still pending | |
-| Avg polls to complete | |
-| Explicit async used | |
+| Median latency | 333ms |
+| Requests/sec | 219 req/s |
+| Custom error rate | 1.64% |
+| Async completed | 1,421 |
+| Async still pending | 665 |
+| Avg polls to complete | 7.2 (≈3.5s) |
+| Publish latency (median) | 359ms |
+| Explicit async used | 619 |
+
+### Key Observations: Sync vs Async
+
+| Metric | Test 1 (Sync) | Test 2 (Async) | Change |
+|--------|--------------|----------------|--------|
+| Throughput | 64 req/s | 78 req/s | **+22%** |
+| Median latency | 6,110ms | 4,430ms | **−27%** |
+| Write latency (median) | 6,113ms | 3,610ms | **−41%** |
+| Error rate | 1.26% | 3.01% | +1.75% |
+
+**Why the write latency didn't drop to ~1ms:** The publish-to-RabbitMQ step itself is fast (~1ms), but under 500 VUs the system is saturated. The latency you see includes Nginx queuing, Tomcat thread pool contention, and the RabbitMQ publish under load. The real benefit shows in **throughput** — 22% more requests/sec because API threads free up faster.
+
+**Why 250/253 status polls were still QUEUED:** At 500 VUs, the consumers can't keep up with the publish rate. Messages queue up in RabbitMQ. The 500ms poll window in the test catches most messages before they're processed. Test 3 at 300 VUs shows 68% reaching COMPLETED — the consumers can keep pace at lower load.
+
+**The async trade-off:** Under extreme load, async shifts the bottleneck from "API threads blocked on DB" to "consumer queue depth growing." The API stays responsive (returns 202 fast), but the actual processing is delayed. This is the right trade-off — users get an immediate acknowledgment instead of a timeout.
 
 ---
 
