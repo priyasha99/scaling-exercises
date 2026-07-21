@@ -194,11 +194,11 @@ K6_WEB_DASHBOARD=true k6 run loadtest/01-no-rate-limit-baseline.js
 
 | Metric | Result |
 |--------|--------|
-| Median latency | |
-| P95 latency | |
-| Requests/sec | |
-| Error rate | |
-| 429 responses | |
+| Median latency | 1,040ms |
+| P95 latency | 3,130ms |
+| Requests/sec | 200 req/s |
+| Error rate | **0.00%** |
+| 429 responses | 0 |
 
 ```bash
 docker compose down
@@ -214,15 +214,15 @@ K6_WEB_DASHBOARD=true k6 run loadtest/02-with-rate-limiting.js
 
 | Metric | Result |
 |--------|--------|
-| Median latency | |
-| P95 latency | |
-| Requests/sec | |
-| Server error rate | |
-| 429 responses (total) | |
-| 429 by user tier | |
-| 429 by IP tier | |
-| 429 by global tier | |
-| Successful requests | |
+| Median latency | **33ms** (429s are instant) |
+| P95 latency | 1,900ms |
+| Total HTTP req/s | 462 req/s |
+| Server error rate | **0.00%** |
+| 429 responses (total) | **30,503** (71%) |
+| 429 by user tier | 24,248 |
+| 429 by IP tier | 5,620 |
+| 429 by global tier | 635 |
+| Successful requests | 12,407 (133 req/s) |
 
 ### Test 3: Tier Verification
 
@@ -232,13 +232,15 @@ K6_WEB_DASHBOARD=true k6 run loadtest/03-rate-limit-tiers.js
 
 | Metric | Result |
 |--------|--------|
-| User rate limited | |
-| User allowed | |
-| Admin rate limited | |
-| Admin allowed | |
-| IP rate limited | |
-| IP allowed | |
-| Retry-After respected | |
+| User rate limited | 11,438 |
+| User allowed | 1,303 |
+| Admin rate limited | 4,872 |
+| Admin allowed | **2,617** (2x more than regular users) |
+| IP rate limited | 6,884 |
+| IP allowed | 475 (strictest tier) |
+| Retry-After respected | **1,398** (wait + retry succeeded) |
+| Custom error rate | **0.00%** |
+| Median latency | 1.37ms (most are fast 429s) |
 
 ---
 
